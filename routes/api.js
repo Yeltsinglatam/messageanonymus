@@ -2,118 +2,211 @@
 "use strict";
 
 const mongoose = require("mongoose");
-const database = require("./database.js");
 
-
-// ==== Esquemas (una colección por board) ====
+// ==== Esquemas ====
 const replySchema = new mongoose.Schema({
   text: { type: String, required: true },
   created_on: { type: Date, default: Date.now },
   delete_password: { type: String, required: true },
-  reported: { type: Boolean, default: false },
+  reported: { type: Boolean, default: false }
 });
 
 const threadSchema = new mongoose.Schema({
+  board: { type: String, index: true },
   text: { type: String, required: true },
   created_on: { type: Date, default: Date.now },
-  bumped_on: { type: Date, default: Date.now },
+  bumped_on: { type: Date, default: Date.now, index: true },
   reported: { type: Boolean, default: false },
   delete_password: { type: String, required: true },
   replies: [replySchema],
-  replycount: { type: Number, default: 0 },
+  replycount: { type: Number, default: 0 }
 });
 
-// Evita OverwriteModelError al reutilizar el mismo modelo
-function BoardModel(boardName) {
-  const name = String(boardName || "").toLowerCase();
-  return mongoose.models[name] || mongoose.model(name, threadSchema, name);
+const Thread = mongoose.models.Thread || mongoose.model("Thread", threadSchema);
+
+// ---- helpers de sanitización ----
+function listView(t) {
+  const replies = (t.replies || [])
+    .sort((a, b) => new Date(b.created_on) - new Date(a.created_on))
+    .slice(0, 3)
+    .map(r => ({ _id: r._id, text: r.text, created_on: r.created_on }));
+  return {
+    _id: t._id,
+    text: t.text,
+    created_on: t.created_on,
+    bumped_on: t.bumped_on,
+    replies,
+    replycount: t.replycount || (t.replies ? t.replies.length : 0)
+  };
 }
 
-// ⚠️ IMPORTANTE: NO conectar aquí. La conexión a Mongo va en server.js
+function fullView(t) {
+  return {
+    _id: t._id,
+    text: t.text,
+    created_on: t.created_on,
+    bumped_on: t.bumped_on,
+    replycount: t.replycount || (t.replies ? t.replies.length : 0),
+    replies: (t.replies || []).map(r => ({
+      _id: r._id,
+      text: r.text,
+      created_on: r.created_on
+    }))
+  };
+}
 
 module.exports = function (app) {
   // ---------- THREADS ----------
-  app
-    .route("/api/threads/:board")
-    // Ver 10 hilos más recientes (3 replies c/u)
-    .get((req, res) => {
-      const Board = BoardModel(req.params.board);
-      database.showAll(Board, res);
-    })
-    // Crear hilo (redirect con ?_id=)
-    .post((req, res) => {
-      const board = String(req.params.board || "").toLowerCase();
-      const { text, delete_password } = req.body || {};
-      if (!text || !delete_password)
-        return res.type("text").send("incorrect query");
+  app.route("/api/threads/:board")
 
-      const Board = BoardModel(board);
-      const doc = new Board({
-        text,
-        delete_password,
-        created_on: new Date(),
-        bumped_on: new Date(),
-        reported: false,
-        replies: [],
-        replycount: 0,
-      });
+    // Ver 10 hilos más recientes (3 replies c/u) — limpio
+    .get(async (req, res) => {
+      try {
+        const board = String(req.params.board || "").toLowerCase();
+        const docs = await Thread.find({ board })
+          .sort({ bumped_on: -1 })
+          .limit(10)
+          .lean();
+        return res.json(docs.map(listView));
+      } catch {
+        return res.type("text").send("server error");
+      }
+    })
 
-      database.createThread(doc, res, board);
+    // Crear hilo — REDIRECT a /b/:board/
+    .post(async (req, res) => {
+      try {
+        const board = String(req.params.board || "").toLowerCase();
+        const { text, delete_password } = req.body || {};
+        if (!text || !delete_password) return res.type("text").send("incorrect query");
+
+        await Thread.create({ board, text, delete_password });
+        return res.redirect(`/b/${board}/`);
+      } catch {
+        return res.type("text").send("server error");
+      }
     })
-    // Reportar hilo
-    .put((req, res) => {
-      const { thread_id } = req.body || {};
-      if (!thread_id) return res.type("text").send("incorrect query");
-      const Board = BoardModel(req.params.board);
-      database.reportThread(Board, thread_id, res);
+
+    // Reportar hilo — "reported"
+    .put(async (req, res) => {
+      try {
+        const board = String(req.params.board || "").toLowerCase();
+        const { thread_id } = req.body || {};
+        if (!thread_id) return res.type("text").send("incorrect query");
+
+        const upd = await Thread.findOneAndUpdate(
+          { _id: thread_id, board },
+          { $set: { reported: true } },
+          { new: true }
+        );
+        if (!upd) return res.type("text").send("incorrect board or id");
+        return res.type("text").send("reported");
+      } catch {
+        return res.type("text").send("server error");
+      }
     })
-    // Borrar hilo
-    .delete((req, res) => {
-      const { thread_id, delete_password } = req.body || {};
-      if (!thread_id || !delete_password)
-        return res.type("text").send("incorrect query");
-      const Board = BoardModel(req.params.board);
-      database.deleteThread(Board, thread_id, delete_password, res);
+
+    // Borrar hilo — "success" / "incorrect password"
+    .delete(async (req, res) => {
+      try {
+        const board = String(req.params.board || "").toLowerCase();
+        const { thread_id, delete_password } = req.body || {};
+        if (!thread_id || !delete_password) return res.type("text").send("incorrect query");
+
+        const t = await Thread.findOne({ _id: thread_id, board });
+        if (!t) return res.type("text").send("incorrect board or id");
+        if (t.delete_password !== delete_password) {
+          return res.type("text").send("incorrect password");
+        }
+        await Thread.deleteOne({ _id: thread_id, board });
+        return res.type("text").send("success");
+      } catch {
+        return res.type("text").send("server error");
+      }
     });
 
   // ---------- REPLIES ----------
-  app
-    .route("/api/replies/:board")
-    // Ver un hilo con TODAS sus replies
-    .get((req, res) => {
-      const { thread_id } = req.query || {};
-      if (!thread_id) return res.type("text").send("incorrect query");
-      const Board = BoardModel(req.params.board);
-      database.showThread(Board, thread_id, res);
+  app.route("/api/replies/:board")
+
+    // Ver un hilo con TODAS sus replies — limpio
+    .get(async (req, res) => {
+      try {
+        const board = String(req.params.board || "").toLowerCase();
+        const { thread_id } = req.query || {};
+        if (!thread_id) return res.type("text").send("incorrect query");
+
+        const t = await Thread.findOne({ _id: thread_id, board }).lean();
+        if (!t) return res.type("text").send("incorrect board or id");
+
+        // (opcional: ordena replies)
+        t.replies = (t.replies || []).sort((a, b) => new Date(b.created_on) - new Date(a.created_on));
+        return res.json(fullView(t));
+      } catch {
+        return res.type("text").send("server error");
+      }
     })
-    // Crear reply (bump y redirect con ?_id=<replyId>)
-    .post((req, res) => {
-      const board = String(req.params.board || "").toLowerCase();
-      const { thread_id, text, delete_password } = req.body || {};
-      if (!thread_id || !text || !delete_password)
-        return res.type("text").send("incorrect query");
-      const Board = BoardModel(board);
-      database.createPost(
-        Board,
-        { thread_id, text, delete_password },
-        res,
-        board
-      );
+
+    // Crear reply — bump y REDIRECT a /b/:board/:thread_id
+    .post(async (req, res) => {
+      try {
+        const board = String(req.params.board || "").toLowerCase();
+        const { thread_id, text, delete_password } = req.body || {};
+        if (!thread_id || !text || !delete_password) return res.type("text").send("incorrect query");
+
+        const now = new Date();
+        const upd = await Thread.findOneAndUpdate(
+          { _id: thread_id, board },
+          { $push: { replies: { text, delete_password, created_on: now } }, $set: { bumped_on: now }, $inc: { replycount: 1 } },
+          { new: true }
+        );
+        if (!upd) return res.type("text").send("incorrect board or id");
+        return res.redirect(`/b/${board}/${thread_id}`);
+      } catch {
+        return res.type("text").send("server error");
+      }
     })
-    // Reportar reply
-    .put((req, res) => {
-      const { thread_id, reply_id } = req.body || {};
-      if (!thread_id || !reply_id)
-        return res.type("text").send("incorrect query");
-      const Board = BoardModel(req.params.board);
-      database.reportPost(Board, thread_id, reply_id, res);
+
+    // Reportar reply — "reported"
+    .put(async (req, res) => {
+      try {
+        const board = String(req.params.board || "").toLowerCase();
+        const { thread_id, reply_id } = req.body || {};
+        if (!thread_id || !reply_id) return res.type("text").send("incorrect query");
+
+        const t = await Thread.findOne({ _id: thread_id, board });
+        if (!t) return res.type("text").send("incorrect board or id");
+        const r = t.replies.id(reply_id);
+        if (!r) return res.type("text").send("incorrect board or id");
+
+        r.reported = true;
+        await t.save();
+        return res.type("text").send("reported");
+      } catch {
+        return res.type("text").send("server error");
+      }
     })
-    // Borrar reply (texto = "[deleted]")
-    .delete((req, res) => {
-      const { thread_id, reply_id, delete_password } = req.body || {};
-      if (!thread_id || !reply_id || !delete_password)
-        return res.type("text").send("incorrect query");
-      const Board = BoardModel(req.params.board);
-      database.deletePost(Board, thread_id, reply_id, delete_password, res);
+
+    // Borrar reply — set text "[deleted]" → "success" / "incorrect password"
+    .delete(async (req, res) => {
+      try {
+        const board = String(req.params.board || "").toLowerCase();
+        const { thread_id, reply_id, delete_password } = req.body || {};
+        if (!thread_id || !reply_id || !delete_password) return res.type("text").send("incorrect query");
+
+        const t = await Thread.findOne({ _id: thread_id, board });
+        if (!t) return res.type("text").send("incorrect board or thread id");
+        const r = t.replies.id(reply_id);
+        if (!r) return res.type("text").send("incorrect post id");
+        if (r.delete_password !== delete_password) {
+          return res.type("text").send("incorrect password");
+        }
+
+        r.text = "[deleted]";
+        t.replycount = Math.max(0, (t.replycount || 0) - 1);
+        await t.save();
+        return res.type("text").send("success");
+      } catch {
+        return res.type("text").send("server error");
+      }
     });
 };
