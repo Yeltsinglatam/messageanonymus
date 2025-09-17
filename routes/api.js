@@ -3,7 +3,7 @@
 
 const mongoose = require("mongoose");
 
-// ==== Esquemas ====
+/* ===== Esquemas ===== */
 const replySchema = new mongoose.Schema({
   text: { type: String, required: true },
   created_on: { type: Date, default: Date.now },
@@ -22,15 +22,16 @@ const threadSchema = new mongoose.Schema({
   replycount: { type: Number, default: 0 },
 });
 
-// Un solo modelo "Thread" con un campo `board`
+/* Un solo modelo con campo `board` */
 const Thread = mongoose.models.Thread || mongoose.model("Thread", threadSchema);
 
-// ---- helpers de salida limpia ----
+/* ===== Helpers de salida (sin campos sensibles) ===== */
 function listView(t) {
   const replies = (t.replies || [])
     .sort((a, b) => new Date(b.created_on) - new Date(a.created_on))
     .slice(0, 3)
     .map((r) => ({ _id: r._id, text: r.text, created_on: r.created_on }));
+
   return {
     _id: t._id,
     text: t.text,
@@ -56,12 +57,13 @@ function fullView(t) {
   };
 }
 
+/* ===== Rutas ===== */
 module.exports = function (app) {
-  // ---------- THREADS ----------
+  /* ---------- THREADS ---------- */
   app
     .route("/api/threads/:board")
 
-    // Ver 10 hilos más recientes (3 replies c/u) — limpio
+    // Ver 10 hilos más recientes (máx 3 replies c/u), sin campos sensibles
     .get(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
@@ -75,7 +77,7 @@ module.exports = function (app) {
       }
     })
 
-    // Crear hilo — REDIRECT a /b/:board/
+    // Crear hilo → redirect /b/:board/
     .post(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
@@ -90,12 +92,16 @@ module.exports = function (app) {
       }
     })
 
-    // Reportar hilo — "reported"
+    // Reportar hilo → "reported" | "incorrect board or id"
     .put(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
         const { thread_id } = req.body || {};
         if (!thread_id) return res.type("text").send("incorrect query");
+
+        // Valida formato ObjectId para normalizar errores
+        const isValidId = /^[0-9a-fA-F]{24}$/.test(String(thread_id).trim());
+        if (!isValidId) return res.type("text").send("incorrect board or id");
 
         const upd = await Thread.findOneAndUpdate(
           { _id: thread_id, board },
@@ -105,11 +111,11 @@ module.exports = function (app) {
         if (!upd) return res.type("text").send("incorrect board or id");
         return res.type("text").send("reported");
       } catch {
-        return res.type("text").send("server error");
+        return res.type("text").send("incorrect board or id");
       }
     })
 
-    // Borrar hilo — "success" / "incorrect password"
+    // Borrar hilo → "success" | "incorrect password" | "incorrect board or id"
     .delete(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
@@ -129,11 +135,11 @@ module.exports = function (app) {
       }
     });
 
-  // ---------- REPLIES ----------
+  /* ---------- REPLIES ---------- */
   app
     .route("/api/replies/:board")
 
-    // Ver un hilo con TODAS sus replies — limpio
+    // Ver un hilo con TODAS sus replies, sin campos sensibles
     .get(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
@@ -152,7 +158,7 @@ module.exports = function (app) {
       }
     })
 
-    // Crear reply — bump y REDIRECT a /b/:board/:thread_id
+    // Crear reply → bump y redirect /b/:board/:thread_id
     .post(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
@@ -177,7 +183,7 @@ module.exports = function (app) {
       }
     })
 
-    // Reportar reply — "reported"
+    // Reportar reply → "reported" | "incorrect board or id"
     .put(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
@@ -198,7 +204,7 @@ module.exports = function (app) {
       }
     })
 
-    // Borrar reply — set text "[deleted]" → "success" / "incorrect password"
+    // Borrar reply → "[deleted]" y "success" / "incorrect password"
     .delete(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
