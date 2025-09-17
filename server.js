@@ -1,84 +1,92 @@
-'use strict';
+"use strict";
+require("dotenv").config();
 
-require('dotenv').config();
+const express = require("express");
+const path = require("path");
+const helmet = require("helmet");
+const cors = require("cors");
+const mongoose = require("mongoose");
 
-const PORT = process.env.PORT || 3000;
-const cors        = require('cors');
-const express     = require('express');
-const helmet      = require('helmet');
-const expect      = require('chai').expect;
-const path        = require('path');
-
-const apiRoutes         = require('./routes/api.js');
-const fccTestingRoutes  = require('./routes/fcctesting.js');
-const runner            = require('./test-runner');
+const apiRoutes = require("./routes/api.js");
+const fccTestingRoutes = require("./routes/fcctesting.js");
+const runner = require("./test-runner");
 
 const app = express();
 
+/* ---- Seguridad (Helmet v3, como pide FCC) ---- */
+app.use(helmet.hidePoweredBy({ setTo: "PHP 7.4.3" }));
+app.use(helmet.noSniff());
+app.use(helmet.xssFilter());
+app.use(helmet.noCache());
+app.use(helmet.frameguard({ action: "sameorigin" }));
+app.use(helmet.dnsPrefetchControl({ allow: false }));
+app.use(helmet.referrerPolicy({ policy: "same-origin" }));
 app.use(
-  helmet.frameguard(),
-  helmet.dnsPrefetchControl(),
-  helmet.referrerPolicy({policy: 'same-origin'})
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'self'"],
+      baseUri: ["'self'"],
+    },
+  })
 );
 
-app.use(cors({origin: '*'}));
-app.use('/public', express.static(path.join(__dirname, 'public')));
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+/* ---- Imprescindible para que req.body NO llegue vacío ---- */
+app.use(cors({ origin: "*" })); // FCC tests
+app.use(express.json()); // JSON
+app.use(express.urlencoded({ extended: true })); // x-www-form-urlencoded
 
-app.route('/b/:board/')
-  .get(function (_, res) {
-    res.sendFile(`${process.cwd()}/views/board.html`);
-  });
-app.route('/b/:board/:threadid')
-  .get(function (_, res) {
-    res.sendFile(`${process.cwd()}/views/thread.html`);
+/* ---- Estáticos y vistas que FCC asume ---- */
+app.use("/public", express.static(process.cwd() + "/public"));
+app.get("/", (req, res) => res.sendFile(process.cwd() + "/views/index.html"));
+app.get("/b/:board/", (req, res) =>
+  res.sendFile(process.cwd() + "/views/board.html")
+);
+app.get("/b/:board/:thread_id", (req, res) =>
+  res.sendFile(process.cwd() + "/views/thread.html")
+);
+
+/* ---- Conexión a Mongo (UNA SOLA VEZ AQUÍ) ---- */
+const uri = process.env.DB || process.env.MONGO_URI || process.env.DB2;
+if (!uri) {
+  console.error("❌ Falta la variable de entorno DB / MONGO_URI / DB2.");
+  process.exit(1);
+}
+mongoose.set("strictQuery", false);
+mongoose
+  .connect(uri) // si tu URI ya incluye /nombreBD, no pases dbName extra
+  .then(() => console.log("✅ Mongo connected"))
+  .catch((e) => {
+    console.error("❌ Mongo connection error", e);
+    process.exit(1);
   });
 
-app.route('/')
-  .get(function (_, res) {
-    res.sendFile(`${process.cwd()}/views/index.html`);
-  });
-
+/* ---- Rutas FCC y API ---- */
 fccTestingRoutes(app);
 apiRoutes(app);
 
-app.use(function(req, res, next) {
-  res.status(404)
-    .type('text')
-    .send('Not Found');
-});
+/* ---- 404 ---- */
+app.use((req, res) => res.status(404).type("text").send("Not Found"));
 
-app.use((err, req, res, next) => {
-  let errCode, errMessage;
-
-  if (err.errors) {
-    errCode = 400;
-    const keys = Object.keys(err.errors);
-
-    errMessage = err.errors[keys[0]].message;
-  } else {
-    errCode = err.status || 500;
-    errMessage = err.message || 'Internal Server Error';
-  }
-
-  res.status(errCode).type('txt').send(errMessage);
-});
-
-app.listen(PORT, function () {
-  console.log(`Listening on port ${PORT}`);
-  if(process.env.NODE_ENV==='test') {
-    console.log('Running Tests...');
+/* ---- Listen + test runner ---- */
+const port = process.env.PORT || 3000;
+app.listen(port, function () {
+  console.log("Listening on port " + (process.env.PORT || 3000));
+  if (process.env.NODE_ENV === "test") {
+    console.log("Running Tests...");
     setTimeout(function () {
       try {
         runner.run();
-      } catch(e) {
-        var error = e;
-          console.log('Tests are not valid:');
-          console.log(error);
+      } catch (e) {
+        console.log("Tests are not valid:", e);
       }
     }, 1500);
   }
 });
 
-module.exports = app;
+module.exports = app; // for testing
