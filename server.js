@@ -35,12 +35,12 @@ app.use(
   })
 );
 
-/* --- Imprescindible para que FCC lea el body --- */
+/* --- IMPRESCINDIBLE para que req.body NO llegue vacío --- */
 app.use(cors({ origin: "*" })); // FCC tests
-app.use(express.json()); // JSON
+app.use(express.json()); // JSON parser
 app.use(express.urlencoded({ extended: true })); // x-www-form-urlencoded
 
-/* --- Estáticos y vistas que FCC asume --- */
+/* --- Estáticos y vistas que el runner de FCC asume --- */
 app.use("/public", express.static(process.cwd() + "/public"));
 app.get("/", (req, res) => res.sendFile(process.cwd() + "/views/index.html"));
 app.get("/b/:board/", (req, res) =>
@@ -50,7 +50,7 @@ app.get("/b/:board/:thread_id", (req, res) =>
   res.sendFile(process.cwd() + "/views/thread.html")
 );
 
-/* --- Rutas de FCC y API --- */
+/* --- Rutas FCC y API --- */
 fccTestingRoutes(app);
 apiRoutes(app);
 
@@ -60,7 +60,7 @@ app.use((req, res) => res.status(404).type("text").send("Not Found"));
 /* --- Listen + test runner --- */
 const port = process.env.PORT || 3000;
 app.listen(port, function () {
-  console.log("Listening on port " + port);
+  console.log("Listening on port " + (process.env.PORT || 3000));
   if (process.env.NODE_ENV === "test") {
     console.log("Running Tests...");
     setTimeout(function () {
@@ -73,4 +73,4 @@ app.listen(port, function () {
   }
 });
 
-module.exports = app;
+module.exports = app; // for testing
