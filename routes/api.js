@@ -2,7 +2,8 @@
 "use strict";
 
 const mongoose = require("mongoose");
-const database = require("../database.js"); // <- usa tu helper database.js
+const database = require("./database.js");
+
 
 // ==== Esquemas (una colección por board) ====
 const replySchema = new mongoose.Schema({
