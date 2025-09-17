@@ -76,15 +76,15 @@ module.exports = function (app) {
       }
     })
 
-    // Crear hilo → redirect /b/:board/
+    // Crear hilo → redirect /b/:board/?_id=<threadId>
     .post(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
         const { text, delete_password } = req.body || {};
         if (!text || !delete_password) return res.type("text").send("incorrect query");
 
-        await Thread.create({ board, text, delete_password });
-        return res.redirect(`/b/${board}/`);
+        const doc = await Thread.create({ board, text, delete_password });
+        return res.redirect(`/b/${board}/?_id=${doc._id}`);
       } catch {
         return res.type("text").send("server error");
       }
@@ -96,24 +96,19 @@ module.exports = function (app) {
         const board = String(req.params.board || "").toLowerCase();
         let { thread_id } = req.body || {};
         if (!thread_id) return res.type("text").send("incorrect query");
-
         thread_id = String(thread_id).trim();
 
-        // ✅ Valida formato de ObjectId para evitar cast errors
         const isValidId = /^[0-9a-fA-F]{24}$/.test(thread_id);
         if (!isValidId) return res.type("text").send("incorrect board or id");
 
-        // ✅ Filtra por board + id (si no existe o board no coincide → "incorrect board or id")
         const upd = await Thread.findOneAndUpdate(
           { _id: thread_id, board },
           { $set: { reported: true } },
           { new: true }
         );
-
         if (!upd) return res.type("text").send("incorrect board or id");
         return res.type("text").send("reported");
       } catch {
-        // ✅ Normaliza cualquier error a la respuesta exacta que el test espera
         return res.type("text").send("incorrect board or id");
       }
     })
@@ -157,7 +152,7 @@ module.exports = function (app) {
       }
     })
 
-    // Crear reply → bump y redirect /b/:board/:thread_id
+    // Crear reply → redirect /b/:board/:thread_id?_id=<replyId>
     .post(async (req, res) => {
       try {
         const board = String(req.params.board || "").toLowerCase();
@@ -175,7 +170,9 @@ module.exports = function (app) {
           { new: true }
         );
         if (!upd) return res.type("text").send("incorrect board or id");
-        return res.redirect(`/b/${board}/${thread_id}`);
+
+        const newReplyId = upd.replies[upd.replies.length - 1]._id;
+        return res.redirect(`/b/${board}/${thread_id}?_id=${newReplyId}`);
       } catch {
         return res.type("text").send("server error");
       }
