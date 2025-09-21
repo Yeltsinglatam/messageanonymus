@@ -56,8 +56,20 @@ mongoose
     process.exit(1);
   });
 
-// ───────────────── API
-require("./api.js")(app);
+// ───────────────── API (intenta ./api.js y, si no existe, ./routes/api.js)
+let wired = false;
+try {
+  require("./api.js")(app);           // si api.js está en la raíz
+  wired = true;
+} catch (_) {
+  try {
+    require("./routes/api.js")(app);  // si api.js está en /routes
+    wired = true;
+  } catch (e) {
+    console.error("❌ No se encontró ./api.js ni ./routes/api.js:", e.message);
+    process.exit(1);
+  }
+}
 
 // ───────────────── Arranque
 const PORT = process.env.PORT || 3000;
