@@ -1,76 +1,68 @@
 "use strict";
-require("dotenv").config();
 
-const express = require("express");
 const path = require("path");
-const helmet = require("helmet");
+const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const mongoose = require("mongoose");
 
-const apiRoutes = require("./routes/api.js");
-const fccTestingRoutes = require("./routes/fcctesting.js");
-const runner = require("./test-runner");
+require("dotenv").config();
 
 const app = express();
 
-/* Seguridad FCC (Helmet v3) */
-app.use(helmet.hidePoweredBy({ setTo: "PHP 7.4.3" }));
+// ───────────────── Seguridad FCC (Helmet v3, middlewares explícitos)
+app.use(helmet.hidePoweredBy());
+app.use(helmet.frameguard({ action: "sameorigin" })); // ✔ iFrame solo mismo origen (2)
+app.use(helmet.dnsPrefetchControl()); // ✔ Deshabilitar DNS prefetch (3)
+app.use(helmet.referrerPolicy({ policy: "same-origin" })); // ✔ Referrer solo same-origin (4)
 app.use(helmet.noSniff());
-app.use(helmet.xssFilter());
-app.use(helmet.noCache());
-app.use(helmet.frameguard({ action: "sameorigin" }));
-app.use(helmet.dnsPrefetchControl({ allow: false }));
-app.use(helmet.referrerPolicy({ policy: "same-origin" }));
-app.use(helmet.contentSecurityPolicy({
-  directives: {
-    defaultSrc: ["'self'"],
-    scriptSrc: ["'self'"],
-    styleSrc: ["'self'", "'unsafe-inline'"],
-    imgSrc: ["'self'", "data:"],
-    connectSrc: ["'self'"],
-    objectSrc: ["'none'"],
-    frameAncestors: ["'self'"],
-    baseUri: ["'self'"]
-  }
-}));
 
-/* Body parsers + CORS (imprescindible p/req.body) */
-app.use(cors({ origin: "*" }));
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/* Vistas y estáticos que FCC asume */
-app.use("/public", express.static(process.cwd() + "/public"));
-app.get("/", (req, res) => res.sendFile(process.cwd() + "/views/index.html"));
-app.get("/b/:board/", (req, res) => res.sendFile(process.cwd() + "/views/board.html"));
-app.get("/b/:board/:thread_id", (req, res) => res.sendFile(process.cwd() + "/views/thread.html"));
+// estáticos y vistas (si usas el boilerplate de FCC)
+app.use("/public", express.static(path.join(process.cwd(), "public")));
 
-/* Conexión a Mongo (UNA sola vez aquí) */
-const uri = process.env.DB || process.env.MONGO_URI || process.env.DB2;
-if (!uri) {
-  console.error("❌ Falta la variable DB/MONGO_URI/DB2");
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "views", "index.html"));
+});
+app.get("/b/:board/", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "views", "board.html"));
+});
+app.get("/b/:board/:threadid", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "views", "thread.html"));
+});
+
+// Opcional: rutas de testing del boilerplate (si existen)
+try {
+  require("./routes/fcctesting.js")(app);
+} catch (_) {
+  /* ignorar si no existe */
+}
+
+// ───────────────── Conexión Mongo
+const DB = process.env.DB || process.env.MONGO_URI || process.env.DB2;
+if (!DB) {
+  console.error("❌ Falta variable de entorno DB/MONGO_URI/DB2");
   process.exit(1);
 }
-mongoose.set("strictQuery", false);
-mongoose.connect(uri)
-  .then(() => console.log("✅ Mongo connected"))
-  .catch((e) => { console.error("❌ Mongo connection error", e); process.exit(1); });
+mongoose.set("strictQuery", true);
+mongoose
+  .connect(DB)
+  .then(() => console.log("✅ Mongo conectado"))
+  .catch((err) => {
+    console.error("❌ Error Mongo:", err?.message || err);
+    process.exit(1);
+  });
 
-/* Rutas FCC + API */
-fccTestingRoutes(app);
-apiRoutes(app);
+// ───────────────── API
+require("./api.js")(app);
 
-/* 404 */
-app.use((req, res) => res.status(404).type("text").send("Not Found"));
-
-/* Listen + test runner */
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log("Listening on port " + (process.env.PORT || 3000));
-  if (process.env.NODE_ENV === "test") {
-    console.log("Running Tests...");
-    setTimeout(() => { try { runner.run(); } catch (e) { console.log("Tests are not valid:", e); } }, 1500);
-  }
-});
+// ───────────────── Arranque
+const PORT = process.env.PORT || 3000;
+if (process.env.NODE_ENV !== "test") {
+  app.listen(PORT, () => console.log("🚀 Server en puerto", PORT));
+}
 
 module.exports = app;
