@@ -34,7 +34,7 @@ app.get("/b/:board/:threadid", (_req, res) => {
   res.sendFile(path.join(process.cwd(), "views", "thread.html"));
 });
 
-// Opcional: rutas de testing del boilerplate (si existen)
+// Rutas de testing FCC (si existen)
 try {
   require("./routes/fcctesting.js")(app);
 } catch (_) {
@@ -57,24 +57,40 @@ mongoose
   });
 
 // ───────────────── API (intenta ./api.js y, si no existe, ./routes/api.js)
-let wired = false;
 try {
-  require("./api.js")(app);           // si api.js está en la raíz
-  wired = true;
+  require("./api.js")(app); // si api.js está en la raíz
 } catch (_) {
   try {
-    require("./routes/api.js")(app);  // si api.js está en /routes
-    wired = true;
+    require("./routes/api.js")(app); // si api.js está en /routes
   } catch (e) {
     console.error("❌ No se encontró ./api.js ni ./routes/api.js:", e.message);
     process.exit(1);
   }
 }
 
-// ───────────────── Arranque
-const PORT = process.env.PORT || 3000;
-if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => console.log("🚀 Server en puerto", PORT));
+let runner;
+try {
+  runner = require("./test-runner");
+} catch (_) {
+  /* opcional */
 }
+
+if (process.env.NODE_ENV === "test" && runner) {
+  console.log("Running FCC Tests...");
+  setTimeout(() => {
+    try {
+      runner.run();
+    } catch (e) {
+      console.log("Tests are not valid:");
+      console.error(e);
+    }
+  }, 1500);
+}
+
+const PORT = process.env.PORT || 3000;
+const HOST = "0.0.0.0";
+app.listen(PORT, HOST, () => {
+  console.log("🚀 Server en puerto", PORT);
+});
 
 module.exports = app;
