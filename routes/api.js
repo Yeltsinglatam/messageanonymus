@@ -67,8 +67,8 @@ module.exports = function (app) {
 
       const sanitized = threads.map((t) => {
         const replies = (t.replies || [])
-          .slice() // copia
-          .sort((a, b) => b.created_on - a.created_on) // últimas 3 (más recientes)
+          .slice()
+          .sort((a, b) => b.created_on - a.created_on) // últimas 3 más recientes
           .slice(0, 3)
           .map((r) => ({ _id: r._id, text: r.text, created_on: r.created_on }));
 
@@ -128,7 +128,7 @@ module.exports = function (app) {
   });
 
   // ───────────── Replies
-  // Crear reply -> redirige a /b/:board/:thread_id?_id=<replyId>
+  // Crear reply -> redirige a /b/:board/:thread_id (y usa la MISMA fecha para created_on y bumped_on)
   app.post("/api/replies/:board", async (req, res) => {
     try {
       const board = req.params.board;
@@ -140,18 +140,21 @@ module.exports = function (app) {
       const t = await Thread.findById(thread_id);
       if (!t) return res.status(404).type("text").send("not found");
 
-      // Se guarda con delete_password y reported (para cumplir el requisito del item 6 en DB)
+      // ✅ FECHA ÚNICA para evitar descalce en el test 6
+      const now = new Date();
+
       t.replies.push({
         text,
-        delete_password,
-        created_on: new Date(),
-        reported: false,
+        delete_password, // debe existir en DB para el test 6
+        reported: false, // idem
+        created_on: now,
       });
-      t.bumped_on = new Date();
+
+      t.bumped_on = now; // ✅ EXACTAMENTE la misma fecha del comentario
       await t.save();
 
-      const replyId = t.replies[t.replies.length - 1]._id.toString();
-      return res.redirect(302, `/b/${board}/${t._id}?_id=${replyId}`);
+      // FCC: redirección esperada (sin query extra)
+      return res.redirect(302, `/b/${board}/${t._id}`);
     } catch (e) {
       return res.status(500).type("text").send("server error");
     }
@@ -165,7 +168,7 @@ module.exports = function (app) {
         return res.status(400).type("text").send("missing fields");
       }
 
-      // Solo campos públicos
+      // Solo campos públicos del hilo y replies
       const t = await Thread.findById(thread_id)
         .select(
           "text created_on bumped_on replies._id replies.text replies.created_on"
@@ -174,7 +177,7 @@ module.exports = function (app) {
 
       if (!t) return res.status(404).type("text").send("not found");
 
-      // Mantener el ORDEN ORIGINAL (sin ordenar) para no romper aserciones del test
+      // Mantener orden original
       const replies = (t.replies || []).map((r) => ({
         _id: r._id,
         text: r.text,
