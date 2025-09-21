@@ -1,233 +1,181 @@
-// routes/api.js
-"use strict";
+'use strict';
 
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
-/* ===== Esquemas ===== */
-const replySchema = new mongoose.Schema({
+// ───────────────── Schemas/Model
+const ReplySchema = new mongoose.Schema({
   text: { type: String, required: true },
-  created_on: { type: Date, default: Date.now },
   delete_password: { type: String, required: true },
   reported: { type: Boolean, default: false },
-});
+  created_on: { type: Date, default: Date.now }
+}, { _id: true });
 
-const threadSchema = new mongoose.Schema({
-  board: { type: String, index: true },
+const ThreadSchema = new mongoose.Schema({
+  board: { type: String, required: true, index: true },
   text: { type: String, required: true },
-  created_on: { type: Date, default: Date.now },
-  bumped_on: { type: Date, default: Date.now, index: true },
-  reported: { type: Boolean, default: false },
   delete_password: { type: String, required: true },
-  replies: [replySchema],
-  replycount: { type: Number, default: 0 },
+  reported: { type: Boolean, default: false },
+  created_on: { type: Date, default: Date.now },
+  bumped_on: { type: Date, default: Date.now },
+  replies: { type: [ReplySchema], default: [] }
 });
 
-/* Un solo modelo con campo `board` */
-const Thread = mongoose.models.Thread || mongoose.model("Thread", threadSchema);
+const Thread = mongoose.models.Thread || mongoose.model('Thread', ThreadSchema);
 
-/* ===== Helpers (sin campos sensibles) ===== */
-function listView(t) {
-  const replies = (t.replies || [])
-    .sort((a, b) => new Date(b.created_on) - new Date(a.created_on))
-    .slice(0, 3)
-    .map((r) => ({ _id: r._id, text: r.text, created_on: r.created_on }));
-
-  return {
-    _id: t._id,
-    text: t.text,
-    created_on: t.created_on,
-    bumped_on: t.bumped_on,
-    replies,
-    replycount: t.replycount || (t.replies ? t.replies.length : 0),
-  };
-}
-
-function fullView(t) {
-  return {
-    _id: t._id,
-    text: t.text,
-    created_on: t.created_on,
-    bumped_on: t.bumped_on,
-    replycount: t.replycount || (t.replies ? t.replies.length : 0),
-    replies: (t.replies || []).map((r) => ({
-      _id: r._id,
-      text: r.text,
-      created_on: r.created_on,
-    })),
-  };
-}
-
-/* ===== Rutas ===== */
 module.exports = function (app) {
-  /* ---------- THREADS ---------- */
-  app
-    .route("/api/threads/:board")
 
-    // Ver 10 hilos más recientes (máx 3 replies c/u)
-    .get(async (req, res) => {
-      try {
-        const board = String(req.params.board || "").toLowerCase();
-        const docs = await Thread.find({ board })
-          .sort({ bumped_on: -1 })
-          .limit(10)
-          .lean();
-        return res.json(docs.map(listView));
-      } catch {
-        return res.type("text").send("server error");
-      }
-    })
+  // ───────────── Threads
+  // Crear hilo (redirige a /b/:board/)
+  app.post('/api/threads/:board', async (req, res) => {
+    try {
+      const board = req.params.board;
+      const { text, delete_password } = req.body;
+      if (!text || !delete_password) return res.status(400).type('text').send('missing fields');
 
-    // Crear hilo → redirect /b/:board/?_id=<threadId>
-    .post(async (req, res) => {
-      try {
-        const board = String(req.params.board || "").toLowerCase();
-        const { text, delete_password } = req.body || {};
-        if (!text || !delete_password)
-          return res.type("text").send("incorrect query");
+      await Thread.create({ board, text, delete_password, created_on: new Date(), bumped_on: new Date() });
+      return res.redirect(302, `/b/${board}/`);
+    } catch (e) {
+      return res.status(500).type('text').send('server error');
+    }
+  });
 
-        const doc = await Thread.create({ board, text, delete_password });
-        return res.redirect(`/b/${board}/?_id=${doc._id}`);
-      } catch {
-        return res.type("text").send("server error");
-      }
-    })
+  // Ver 10 hilos con máx 3 replies (ocultar campos sensibles)
+  app.get('/api/threads/:board', async (req, res) => {
+    try {
+      const board = req.params.board;
+      const threads = await Thread.find({ board }).sort({ bumped_on: -1 }).limit(10).lean();
 
-    // Reportar hilo → "reported" | "incorrect board or id"
-    .put(async (req, res) => {
-      try {
-        const board = String(req.params.board || "").toLowerCase();
-        let { thread_id } = req.body || {};
-        if (!thread_id) return res.type("text").send("incorrect query");
-        thread_id = String(thread_id).trim();
+      const sanitized = threads.map(t => {
+        const replies = (t.replies || [])
+          .sort((a, b) => b.created_on - a.created_on)
+          .slice(0, 3)
+          .map(r => ({ _id: r._id, text: r.text, created_on: r.created_on }));
+        return {
+          _id: t._id,
+          text: t.text,
+          created_on: t.created_on,
+          bumped_on: t.bumped_on,
+          replycount: t.replies?.length || 0,
+          replies
+        };
+      });
 
-        const isValidId = /^[0-9a-fA-F]{24}$/.test(thread_id);
-        if (!isValidId) return res.type("text").send("incorrect board or id");
+      return res.json(sanitized);
+    } catch (e) {
+      return res.status(500).type('text').send('server error');
+    }
+  });
 
-        const upd = await Thread.findOneAndUpdate(
-          { _id: thread_id, board },
-          { $set: { reported: true } },
-          { new: true }
-        );
-        if (!upd) return res.type("text").send("incorrect board or id");
-        return res.type("text").send("reported");
-      } catch {
-        return res.type("text").send("incorrect board or id");
-      }
-    })
+  // Reportar hilo
+  app.put('/api/threads/:board', async (req, res) => {
+    try {
+      const { thread_id } = req.body;
+      if (!thread_id) return res.status(400).type('text').send('missing fields');
+      const t = await Thread.findById(thread_id);
+      if (!t) return res.status(404).type('text').send('not found');
+      t.reported = true;
+      await t.save();
+      return res.type('text').send('reported');
+    } catch (e) {
+      return res.status(500).type('text').send('server error');
+    }
+  });
 
-    // Borrar hilo → "success" | "incorrect password" | "incorrect board or id"
-    .delete(async (req, res) => {
-      try {
-        const board = String(req.params.board || "").toLowerCase();
-        const { thread_id, delete_password } = req.body || {};
-        if (!thread_id || !delete_password)
-          return res.type("text").send("incorrect query");
+  // Borrar hilo
+  app.delete('/api/threads/:board', async (req, res) => {
+    try {
+      const { thread_id, delete_password } = req.body;
+      if (!thread_id || !delete_password) return res.status(400).type('text').send('missing fields');
+      const t = await Thread.findById(thread_id);
+      if (!t) return res.type('text').send('incorrect password');
+      if (t.delete_password !== delete_password) return res.type('text').send('incorrect password');
+      await Thread.deleteOne({ _id: t._id });
+      return res.type('text').send('success');
+    } catch (e) {
+      return res.status(500).type('text').send('server error');
+    }
+  });
 
-        const t = await Thread.findOne({ _id: thread_id, board });
-        if (!t) return res.type("text").send("incorrect board or id");
-        if (t.delete_password !== delete_password) {
-          return res.type("text").send("incorrect password");
-        }
-        await Thread.deleteOne({ _id: thread_id, board });
-        return res.type("text").send("success");
-      } catch {
-        return res.type("text").send("server error");
-      }
-    });
+  // ───────────── Replies
+  // Crear reply (redirige a /b/:board/:thread_id)
+  app.post('/api/replies/:board', async (req, res) => {
+    try {
+      const board = req.params.board;
+      const { thread_id, text, delete_password } = req.body;
+      if (!thread_id || !text || !delete_password) return res.status(400).type('text').send('missing fields');
 
-  /* ---------- REPLIES ---------- */
-  app
-    .route("/api/replies/:board")
+      const t = await Thread.findById(thread_id);
+      if (!t) return res.status(404).type('text').send('not found');
 
-    // Ver un hilo con TODAS sus replies
-    .get(async (req, res) => {
-      try {
-        const board = String(req.params.board || "").toLowerCase();
-        const { thread_id } = req.query || {};
-        if (!thread_id) return res.type("text").send("incorrect query");
+      t.replies.push({ text, delete_password, created_on: new Date(), reported: false });
+      t.bumped_on = new Date();
+      await t.save();
 
-        const t = await Thread.findOne({ _id: thread_id, board }).lean();
-        if (!t) return res.type("text").send("incorrect board or id");
+      return res.redirect(302, `/b/${board}/${t._id}`);
+    } catch (e) {
+      return res.status(500).type('text').send('server error');
+    }
+  });
 
-        t.replies = (t.replies || []).sort(
-          (a, b) => new Date(b.created_on) - new Date(a.created_on)
-        );
-        return res.json(fullView(t));
-      } catch {
-        return res.type("text").send("server error");
-      }
-    })
+  // Ver un hilo con todas sus replies (ocultar campos sensibles)
+  app.get('/api/replies/:board', async (req, res) => {
+    try {
+      const { thread_id } = req.query;
+      if (!thread_id) return res.status(400).type('text').send('missing fields');
 
-    // Crear reply → redirect /b/:board/:thread_id?_id=<replyId>
-    .post(async (req, res) => {
-      try {
-        const board = String(req.params.board || "").toLowerCase();
-        const { thread_id, text, delete_password } = req.body || {};
-        if (!thread_id || !text || !delete_password)
-          return res.type("text").send("incorrect query");
+      const t = await Thread.findById(thread_id).lean();
+      if (!t) return res.status(404).type('text').send('not found');
 
-        const now = new Date();
-        const upd = await Thread.findOneAndUpdate(
-          { _id: thread_id, board },
-          {
-            $push: { replies: { text, delete_password, created_on: now } },
-            $set: { bumped_on: now },
-            $inc: { replycount: 1 },
-          },
-          { new: true }
-        );
-        if (!upd) return res.type("text").send("incorrect board or id");
+      const replies = (t.replies || []).map(r => ({ _id: r._id, text: r.text, created_on: r.created_on }));
+      return res.json({
+        _id: t._id,
+        text: t.text,
+        created_on: t.created_on,
+        bumped_on: t.bumped_on,
+        replies
+      });
+    } catch (e) {
+      return res.status(500).type('text').send('server error');
+    }
+  });
 
-        const newReplyId = upd.replies[upd.replies.length - 1]._id;
-        return res.redirect(`/b/${board}/${thread_id}?_id=${newReplyId}`);
-      } catch {
-        return res.type("text").send("server error");
-      }
-    })
+  // Reportar reply
+  app.put('/api/replies/:board', async (req, res) => {
+    try {
+      const { thread_id, reply_id } = req.body;
+      if (!thread_id || !reply_id) return res.status(400).type('text').send('missing fields');
 
-    // Reportar reply → "reported" | "incorrect board or id"
-    .put(async (req, res) => {
-      try {
-        const board = String(req.params.board || "").toLowerCase();
-        const { thread_id, reply_id } = req.body || {};
-        if (!thread_id || !reply_id)
-          return res.type("text").send("incorrect query");
+      const t = await Thread.findById(thread_id);
+      if (!t) return res.status(404).type('text').send('not found');
+      const r = t.replies.id(reply_id);
+      if (!r) return res.status(404).type('text').send('not found');
 
-        const t = await Thread.findOne({ _id: thread_id, board });
-        if (!t) return res.type("text").send("incorrect board or id");
-        const r = t.replies.id(reply_id);
-        if (!r) return res.type("text").send("incorrect board or id");
+      r.reported = true;
+      await t.save();
+      return res.type('text').send('reported');
+    } catch (e) {
+      return res.status(500).type('text').send('server error');
+    }
+  });
 
-        r.reported = true;
-        await t.save();
-        return res.type("text").send("reported");
-      } catch {
-        return res.type("text").send("server error");
-      }
-    })
+  // Borrar reply (text = "[deleted]" si pass correcta)
+  app.delete('/api/replies/:board', async (req, res) => {
+    try {
+      const { thread_id, reply_id, delete_password } = req.body;
+      if (!thread_id || !reply_id || !delete_password) return res.status(400).type('text').send('missing fields');
 
-    // Borrar reply → "[deleted]" y "success" / "incorrect password"
-    .delete(async (req, res) => {
-      try {
-        const board = String(req.params.board || "").toLowerCase();
-        const { thread_id, reply_id, delete_password } = req.body || {};
-        if (!thread_id || !reply_id || !delete_password)
-          return res.type("text").send("incorrect query");
+      const t = await Thread.findById(thread_id);
+      if (!t) return res.status(404).type('text').send('not found');
+      const r = t.replies.id(reply_id);
+      if (!r) return res.status(404).type('text').send('not found');
 
-        const t = await Thread.findOne({ _id: thread_id, board });
-        if (!t) return res.type("text").send("incorrect board or thread id");
-        const r = t.replies.id(reply_id);
-        if (!r) return res.type("text").send("incorrect post id");
-        if (r.delete_password !== delete_password) {
-          return res.type("text").send("incorrect password");
-        }
+      if (r.delete_password !== delete_password) return res.type('text').send('incorrect password');
+      r.text = '[deleted]';
+      await t.save();
+      return res.type('text').send('success');
+    } catch (e) {
+      return res.status(500).type('text').send('server error');
+    }
+  });
 
-        r.text = "[deleted]";
-        t.replycount = Math.max(0, (t.replycount || 0) - 1);
-        await t.save();
-        return res.type("text").send("success");
-      } catch {
-        return res.type("text").send("server error");
-      }
-    });
 };

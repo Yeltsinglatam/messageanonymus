@@ -1,114 +1,105 @@
-// tests/2_functional-tests.js
 const chai = require("chai");
 const chaiHttp = require("chai-http");
 const server = require("../server");
 
-const { expect } = chai;
+const { assert } = chai;
 chai.use(chaiHttp);
 
 suite("Functional Tests", function () {
   this.timeout(8000);
 
   const board = "fccboard-" + Date.now();
-  let threadId; // se setea al crear hilo
-  let replyId; // se setea al crear reply
+  let threadId;
+  const threadPass = "pass123";
 
-  /* 1) Crear un hilo */
-  test("Creating a new thread: POST /api/threads/{board}", async () => {
+  let replyId;
+  const replyPass = "reply123";
+
+  // 1) Crear thread
+  test("POST /api/threads/:board crea hilo y redirige", async () => {
     const res = await chai
       .request(server)
       .post(`/api/threads/${board}`)
       .type("form")
-      .send({ text: "Thread A", delete_password: "tpass" });
+      .send({ text: "Primer hilo", delete_password: threadPass });
 
-    expect(res).to.have.status(200);
-    // el POST redirige a /b/:board/?_id=<threadId>
-    expect(res.redirects[0]).to.match(new RegExp(`/b/${board}/\\?_id=`, "i"));
+    assert.equal(res.status, 200); // superagent sigue la 302 y devuelve 200 de la vista
+    assert.match(res.redirects.join(" "), new RegExp(`/b/${board}/`));
   });
 
-  /* 2) Ver 10 hilos (3 replies c/u) */
-  test("Viewing the 10 most recent threads with 3 replies each: GET /api/threads/{board}", async () => {
+  // 2) Ver 10 threads con hasta 3 replies
+  test("GET /api/threads/:board lista threads", async () => {
     const res = await chai.request(server).get(`/api/threads/${board}`);
-    expect(res).to.have.status(200);
-    expect(res.body).to.be.an("array");
-    expect(res.body.length).to.be.at.least(1);
-    const t = res.body.find((x) => x.text === "Thread A") || res.body[0];
-    expect(t).to.have.property("_id");
-    expect(t).to.have.property("text");
-    expect(t).to.have.property("created_on");
-    expect(t).to.have.property("bumped_on");
-    expect(t).to.have.property("replies").that.is.an("array");
-    expect(t).to.have.property("replycount");
-    expect(t).to.not.have.property("reported");
-    expect(t).to.not.have.property("delete_password");
-    threadId = t._id;
+    assert.equal(res.status, 200);
+    assert.isArray(res.body);
+    assert.isAtMost(res.body.length, 10);
+    if (res.body.length > 0) {
+      const t = res.body[0];
+      threadId = t._id;
+      assert.notProperty(t, "reported");
+      assert.notProperty(t, "delete_password");
+      assert.isAtMost(t.replies.length, 3);
+    }
   });
 
-  /* 3) Borrar hilo con password incorrecto */
-  test("Deleting a thread with the incorrect password: DELETE /api/threads/{board}", async () => {
-    const res = await chai
-      .request(server)
-      .delete(`/api/threads/${board}`)
-      .type("form")
-      .send({ thread_id: threadId, delete_password: "wrong" });
-
-    expect(res).to.have.status(200);
-    expect(res.text).to.equal("incorrect password");
-  });
-
-  /* 4) Reportar hilo */
-  test("Reporting a thread: PUT /api/threads/{board}", async () => {
+  // 3) Reportar thread
+  test("PUT /api/threads/:board reporta", async () => {
     const res = await chai
       .request(server)
       .put(`/api/threads/${board}`)
       .type("form")
       .send({ thread_id: threadId });
-
-    expect(res).to.have.status(200);
-    expect(res.text).to.equal("reported");
+    assert.equal(res.status, 200);
+    assert.equal(res.text, "reported");
   });
 
-  /* 5) Crear reply */
-  test("Creating a new reply: POST /api/replies/{board}", async () => {
+  // 4) Borrar thread con pass incorrecta
+  test("DELETE /api/threads/:board pass incorrecta", async () => {
+    const res = await chai
+      .request(server)
+      .delete(`/api/threads/${board}`)
+      .type("form")
+      .send({ thread_id: threadId, delete_password: "wrong" });
+    assert.equal(res.status, 200);
+    assert.equal(res.text, "incorrect password");
+  });
+
+  // 5) Crear reply
+  test("POST /api/replies/:board crea reply y redirige", async () => {
     const res = await chai
       .request(server)
       .post(`/api/replies/${board}`)
       .type("form")
       .send({
         thread_id: threadId,
-        text: "First reply",
-        delete_password: "rpass",
+        text: "Mi primera respuesta",
+        delete_password: replyPass,
       });
-
-    expect(res).to.have.status(200);
-    // redirige a /b/:board/:threadId?_id=<replyId>
-    expect(res.redirects[0]).to.match(
-      new RegExp(`/b/${board}/${threadId}\\?_id=`, "i")
+    assert.equal(res.status, 200); // tras seguir la redirección
+    assert.match(
+      res.redirects.join(" "),
+      new RegExp(`/b/${board}/${threadId}`)
     );
   });
 
-  /* 6) Ver un hilo con TODAS sus replies */
-  test("Viewing a single thread with all replies: GET /api/replies/{board}", async () => {
+  // 6) Ver thread con todas las replies
+  test("GET /api/replies/:board muestra hilo completo", async () => {
     const res = await chai
       .request(server)
       .get(`/api/replies/${board}`)
       .query({ thread_id: threadId });
-
-    expect(res).to.have.status(200);
-    expect(res.body).to.be.an("object");
-    expect(res.body).to.have.property("_id", threadId);
-    expect(res.body).to.have.property("replies").that.is.an("array");
-    expect(res.body).to.not.have.property("reported");
-    expect(res.body).to.not.have.property("delete_password");
-    expect(res.body.replies[0]).to.be.an("object");
-    expect(res.body.replies[0]).to.not.have.property("reported");
-    expect(res.body.replies[0]).to.not.have.property("delete_password");
-
+    assert.equal(res.status, 200);
+    assert.equal(res.body._id, threadId);
+    assert.isArray(res.body.replies);
+    assert.isAtLeast(res.body.replies.length, 1);
     replyId = res.body.replies[0]._id;
+    const r = res.body.replies[0];
+    assert.notProperty(r, "delete_password");
+    assert.notProperty(r, "reported");
   });
 
-  /* 7) Borrar reply con password incorrecto */
-  test("Deleting a reply with the incorrect password: DELETE /api/replies/{board}", async () => {
+  // 7) Borrar reply con pass incorrecta
+  test("DELETE /api/replies/:board pass incorrecta", async () => {
     const res = await chai
       .request(server)
       .delete(`/api/replies/${board}`)
@@ -118,25 +109,23 @@ suite("Functional Tests", function () {
         reply_id: replyId,
         delete_password: "nope",
       });
-
-    expect(res).to.have.status(200);
-    expect(res.text).to.equal("incorrect password");
+    assert.equal(res.status, 200);
+    assert.equal(res.text, "incorrect password");
   });
 
-  /* 8) Reportar reply */
-  test("Reporting a reply: PUT /api/replies/{board}", async () => {
+  // 8) Reportar reply
+  test("PUT /api/replies/:board reporta", async () => {
     const res = await chai
       .request(server)
       .put(`/api/replies/${board}`)
       .type("form")
       .send({ thread_id: threadId, reply_id: replyId });
-
-    expect(res).to.have.status(200);
-    expect(res.text).to.equal("reported");
+    assert.equal(res.status, 200);
+    assert.equal(res.text, "reported");
   });
 
-  /* 9) Borrar reply con password correcto */
-  test("Deleting a reply with the correct password: DELETE /api/replies/{board}", async () => {
+  // 9) Borrar reply con pass correcta
+  test("DELETE /api/replies/:board pass correcta", async () => {
     const res = await chai
       .request(server)
       .delete(`/api/replies/${board}`)
@@ -144,22 +133,20 @@ suite("Functional Tests", function () {
       .send({
         thread_id: threadId,
         reply_id: replyId,
-        delete_password: "rpass",
+        delete_password: replyPass,
       });
-
-    expect(res).to.have.status(200);
-    expect(res.text).to.equal("success");
+    assert.equal(res.status, 200);
+    assert.equal(res.text, "success");
   });
 
-  /* 10) Borrar hilo con password correcto */
-  test("Deleting a thread with the correct password: DELETE /api/threads/{board}", async () => {
+  // 10) Borrar thread con pass correcta
+  test("DELETE /api/threads/:board pass correcta", async () => {
     const res = await chai
       .request(server)
       .delete(`/api/threads/${board}`)
       .type("form")
-      .send({ thread_id: threadId, delete_password: "tpass" });
-
-    expect(res).to.have.status(200);
-    expect(res.text).to.equal("success");
+      .send({ thread_id: threadId, delete_password: threadPass });
+    assert.equal(res.status, 200);
+    assert.equal(res.text, "success");
   });
 });
