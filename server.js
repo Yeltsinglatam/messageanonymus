@@ -88,9 +88,9 @@ if (process.env.NODE_ENV === "test" && runner) {
 }
 
 const PORT = process.env.PORT || 3000;
-const HOST = "0.0.0.0";
-app.listen(PORT, HOST, () => {
-  console.log("🚀 Server en puerto", PORT);
+// Render inyecta PORT: DEBE usarse ese valor
+app.listen(PORT, () => {
+  console.log("🚀 Server en puerto", PORT, "NODE_ENV=", process.env.NODE_ENV);
 });
 
 module.exports = app;
